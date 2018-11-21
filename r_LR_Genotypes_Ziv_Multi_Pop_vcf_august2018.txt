@@ -1,0 +1,273 @@
+# This script calculates likelihood ratio based on genotypes
+# There are 3 input files.
+# Input file 1: list of SNP info files
+# 1st col: population index
+# 2nd col: name of snp info file
+# SNP info file for a specific population
+# It has a one-line header
+# 1st col: snp id
+# 2nd col: risk allele
+# 3rd col: other allele
+# 4th col: OR
+# 5th-10th col: allele frequency for AFR, AMR, EAS, EUR, SAS, and ALL
+# There should not be missing values in this file
+# Input file 2: genotype file (vcf)
+# It has a one-line header
+# The first 5 columns are: chr, pos, snp id, ref, alt
+# The 6th column and after: genotype as 1|0 or 1/0, etc. Missing data are ./. or .|.
+# There should not be duplicate SNP ID or sample ID.
+# Input file 3: BCSC 5-yr-risk
+# It has a one-line header
+# 1st col: sample ID
+# 2nd col: BCSC 5-yr-risk B
+# 3rd col: population
+
+# Initialization
+
+build.geno=function(a1,a2) {
+	geno.hom.a1=paste(a1,a1,sep='')
+	geno.het1=paste(a1,a2,sep='')
+	geno.het2=paste(a2,a1,sep='')
+	geno.hom.a2=paste(a2,a2,sep='')
+	geno.all=list(hom.risk=geno.hom.a1,het1=geno.het1,het2=geno.het2,hom.alt=geno.hom.a2)
+	return(geno.all)
+}
+
+flip.strand=function(allele) {
+	allele.vec=strsplit(allele,'')[[1]]
+	allele.vec.flipped=allele.vec
+	ind.A=which(allele.vec=='A')
+	ind.C=which(allele.vec=='C')
+	ind.G=which(allele.vec=='G')
+	ind.T=which(allele.vec=='T')
+	allele.vec.flipped[ind.A]='T'
+	allele.vec.flipped[ind.C]='G'
+	allele.vec.flipped[ind.G]='C'
+	allele.vec.flipped[ind.T]='A'
+	allele.flipped=paste(allele.vec.flipped,collpase='')
+	return(allele.flipped)
+}
+
+
+inNameSNPInput='snp_input_files_all.txt'
+inNameGeno='merged_ucsf_mec_kp_cama_coh_for_prs_modified.vcf'
+inNamePreProb='BCSC_merge_ucsf_kp_mec_cama_coh.txt'
+prev=0.04
+pop.ref='AMR'
+
+outNameLR='LR_groups_ucsf_kp_mec_cama_coh.txt'
+outNameLRProd='PRS_ucsf_kp_mec_cama_coh.txt'
+outNamePostProb='BCSC+PRS_ucsf_kp_mec_cama_coh.txt'
+outNameSNPinRefNotSample='SNPs_in_Ref_not_Samples_ucsf_kp_mec_cama_coh.txt'
+outNameSNPinSampleNotRef='SNPs_in_Samples_not_Ref_ucsf_kp_mec_cama_coh.txt'
+outNameSNPStrandFlipped='SNPs_Strand_Flipped_ucsf_kp_mec_cama_coh.txt'
+outNameErrorSNP='Problematic_SNPs_ucsf_kp_mec_cama_coh.txt'
+
+snp.input.all=read.table(inNameSNPInput,sep='\t',stringsAsFactors=F,strip.white=T)
+vcf.samples=read.table(inNameGeno,header=T,sep='\t',row.names=3,stringsAsFactors=F,strip.white=T,check.names=F)
+pre.prob=read.table(inNamePreProb,header=T,sep='\t',stringsAsFactors=F,strip.white=T)
+
+# End of initialization
+
+n.pop=unique(pre.prob[,3])
+
+lr.all.indv.final=NULL
+prod.lr.indv.final=NULL
+post.percent.final=NULL
+snps.in.ref.not.samples.final=NULL
+snps.in.samples.not.ref.final=NULL
+snp.strand.flipped.final=NULL
+snp.error.final=NULL
+
+geno.samples=NULL
+for (k in 1:nrow(vcf.samples)) {
+	tempgeno=vcf.samples[k,5:ncol(vcf.samples)]
+	tempgeno.letter=tempgeno
+	hom.ref=paste0(vcf.samples[k,3],vcf.samples[k,3])
+	het=paste0(vcf.samples[k,3],vcf.samples[k,4])
+	hom.alt=paste0(vcf.samples[k,4],vcf.samples[k,4])
+	tempind.hom.ref=which(tempgeno=='0|0'|tempgeno=='0/0')
+	tempind.het=which(tempgeno=='1|0'|tempgeno=='1/0'|tempgeno=='0|1'|tempgeno=='0/1')
+	tempind.hom.alt=which(tempgeno=='1|1'|tempgeno=='1/1')
+	tempind.missing=which(tempgeno=='./.'|tempgeno=='.|.')
+	tempgeno.letter[tempind.hom.ref]=hom.ref
+	tempgeno.letter[tempind.het]=het
+	tempgeno.letter[tempind.hom.alt]=hom.alt
+	tempgeno.letter[tempind.missing]=NA
+	geno.samples=cbind(geno.samples,t(tempgeno.letter))
+}
+
+for (j in n.pop) {
+	inNameSNP=snp.input.all[snp.input.all[,1]==j,2]
+	snp.info=read.table(inNameSNP,header=T,row.names=1,stringsAsFactors=F,strip.white=T,sep='\t')
+	sampleid.pop=pre.prob[pre.prob[,3]==j,1]	
+	geno.pop=geno.samples[is.element(rownames(geno.samples),sampleid.pop),]	
+	snp.info.common=snp.info[is.element(rownames(snp.info),colnames(geno.pop)),]
+	geno.pop.common=geno.pop[,rownames(snp.info.common)]
+
+	snps.common=rownames(snp.info.common)
+	snps.in.ref.not.samples=rownames(snp.info)[!is.element(rownames(snp.info),colnames(geno.pop))]
+	snps.in.samples.not.ref=colnames(geno.pop)[!is.element(colnames(geno.pop),rownames(snp.info))]
+
+	freq=snp.info.common[,pop.ref]
+	OR=snp.info.common[,3]
+
+	n.snp=nrow(snp.info.common)
+
+	geno.aa=freq^2
+	geno.ab=2*freq*(1-freq)
+	geno.bb=(1-freq)^2
+	geno.3=cbind(geno.aa,geno.ab,geno.bb)
+
+	risk.aa=OR^2
+	risk.ab=OR
+	risk.bb=rep(1,n.snp)
+	risk.3=cbind(risk.aa,risk.ab,risk.bb)
+
+	denom.mat=geno.3*risk.3
+	denom=apply(denom.mat,1,sum)
+
+	lr.aa=(1-prev)*(risk.aa/(denom-risk.aa*prev))
+	lr.ab=(1-prev)*(risk.ab/(denom-risk.ab*prev))
+	lr.bb=(1-prev)/(denom-risk.bb*prev)
+	lr.mat=cbind(LR.AA=lr.aa,LR.AB=lr.ab,LR.BB=lr.bb)
+	rownames(lr.mat)=rownames(snp.info.common)
+
+	allele.risk=snp.info.common[,1]
+	allele.alt=snp.info.common[,2]
+
+	lr.all.indv=NULL
+	snp.selected=NULL
+	snp.strand.flipped=NULL
+	snp.error=NULL
+	lr.tot=1
+	for (i in 1:n.snp) {
+		templr=lr.mat[i,]
+		tempsnp=rownames(lr.mat)[i]
+		a.risk=allele.risk[i]
+		a.alt=allele.alt[i]
+
+		geno.all=build.geno(a.risk,a.alt)
+		geno.hom.risk=geno.all$hom.risk
+		geno.het1=geno.all$het1
+		geno.het2=geno.all$het2
+		geno.hom.alt=geno.all$hom.alt
+
+		geno.snp.info=levels(as.factor(c(geno.hom.risk,geno.het1,geno.het2,geno.hom.alt)))
+	
+		tempgeno=geno.pop.common[,tempsnp]
+		geno.level.sample=levels(as.factor(tempgeno))
+		n.geno.sample=length(geno.level.sample)
+
+		if (n.geno.sample>3) {
+			count1=sum(tempgeno==geno.level.sample[1])
+			count2=sum(tempgeno==geno.level.sample[2])
+			count3=sum(tempgeno==geno.level.sample[3])
+			min.count=min(c(count1,count2,count3))
+			ind=which(c(count1,count2,count3)==min.count)
+			geno.tri=geno.level.sample[ind]
+			tempgeno[tempgeno==geno.tri]=NA
+		}
+
+
+		check.strand=sum(is.element(geno.level.sample,geno.snp.info))
+
+		if (check.strand==n.geno.sample) {
+			snp.selected=c(snp.selected,tempsnp)
+			tempgeno.num=rep(NA,length(tempgeno))
+			tempgeno.num[tempgeno==geno.hom.risk]=1
+			tempgeno.num[tempgeno==geno.het1|tempgeno==geno.het2]=2
+			tempgeno.num[tempgeno==geno.hom.alt]=3
+			templr.geno=templr[tempgeno.num]
+			templr.geno[is.na(tempgeno)]=1
+			lr.tot=lr.tot*prod(templr.geno)
+			lr.all.indv=cbind(lr.all.indv,templr.geno)
+		} else {
+			a.risk.flipped=flip.strand(a.risk)
+			a.alt.flipped=flip.strand(a.alt)
+			geno.all=build.geno(a.risk.flipped,a.alt.flipped)
+			geno.hom.risk.flipped=geno.all$hom.risk
+			geno.het1.flipped=geno.all$het1
+			geno.het2.flipped=geno.all$het2
+			geno.hom.alt.flipped=geno.all$hom.alt
+			geno.snp.info.flipped=levels(as.factor(c(geno.hom.risk.flipped,geno.het1.flipped,geno.het2.flipped,geno.hom.alt.flipped)))
+			check.strand.flipped=sum(is.element(geno.level.sample,geno.snp.info.flipped))
+			if (check.strand.flipped==n.geno.sample) {
+				snp.selected=c(snp.selected,tempsnp)
+				tempgeno.num=rep(NA,length(tempgeno))
+				tempgeno.num[tempgeno==geno.hom.risk.flipped]=1
+				tempgeno.num[tempgeno==geno.het1.flipped|tempgeno==geno.het2.flipped]=2
+				tempgeno.num[tempgeno==geno.hom.alt.flipped]=3
+				templr.geno=templr[tempgeno.num]
+				templr.geno[is.na(tempgeno)]=1
+				lr.tot=lr.tot*prod(templr.geno)
+				lr.all.indv=cbind(lr.all.indv,templr.geno)
+				snp.strand.flipped=c(snp.strand.flipped,tempsnp)
+			} else {
+				snp.error=c(snp.error,tempsnp)
+			}
+		}
+	}
+
+	colnames(lr.all.indv)=snp.selected
+	rownames(lr.all.indv)=rownames(geno.pop.common)
+	prod.lr.indv=apply(lr.all.indv,1,prod)
+
+	# pre.prob is percentage so it should be divided by 100
+	K=pre.prob[match(names(prod.lr.indv),pre.prob[,1]),2]/100
+	post.prob=(K*prod.lr.indv)/(K*(prod.lr.indv-1)+1)
+
+	# The output of post.prob should be percentage
+	post.percent=100*post.prob
+
+	lr.all.indv.pop=cbind(SampleID=rownames(lr.all.indv),pop=j,lr.all.indv)
+	prod.lr.indv.pop=cbind(SampleID=rownames(lr.all.indv),prod.lr.indv,j)
+	post.percent.pop=cbind(SampleID=rownames(lr.all.indv),post.percent,j)
+
+	#lr.all.indv.final=rbind(lr.all.indv.final,lr.all.indv.pop)
+	prod.lr.indv.final=rbind(prod.lr.indv.final,prod.lr.indv.pop)
+	post.percent.final=rbind(post.percent.final,post.percent.pop)
+
+	if (length(snps.in.ref.not.samples)>0) {
+		snps.in.ref.not.samples.pop=cbind(snps.in.ref.not.samples,j)
+	} else {
+		snps.in.ref.not.samples.pop=NULL
+	}
+
+	if (length(snps.in.samples.not.ref)>0) {
+		snps.in.samples.not.ref.pop=cbind(snps.in.samples.not.ref,j)
+	} else {
+		snps.in.samples.not.ref.pop=NULL
+	}
+	
+	if (length(snp.strand.flipped)>0) {
+		snp.strand.flipped.pop=cbind(snp.strand.flipped,j)
+	} else {
+		snp.strand.flipped.pop=NULL
+	}
+
+	if (length(snp.error)>0) {
+		snp.error.pop=cbind(snp.error,j)
+	} else {
+		snp.error.pop=NULL
+	}
+
+	snps.in.ref.not.samples.final=rbind(snps.in.ref.not.samples.final,snps.in.ref.not.samples.pop)
+	snps.in.samples.not.ref.final=rbind(snps.in.samples.not.ref.final,snps.in.samples.not.ref.pop)
+	snp.strand.flipped.final=rbind(snp.strand.flipped.final,snp.strand.flipped.pop)
+	snp.error.final=rbind(snp.error.final,snp.error.pop)
+}
+
+#write.table(lr.all.indv.final,outNameLR,quote=F,sep='\t',row.names=F)
+write.table(prod.lr.indv.final,outNameLRProd,quote=F,sep='\t',col.names=F,row.names=F)
+write.table(post.percent.final,outNamePostProb,quote=F,sep='\t',col.names=F,row.names=F)
+write.table(snps.in.ref.not.samples.final,outNameSNPinRefNotSample,quote=F,sep='\t',row.names=F,col.names=F)
+write.table(snps.in.samples.not.ref.final,outNameSNPinSampleNotRef,quote=F,sep='\t',row.names=F,col.names=F)
+write.table(snp.strand.flipped.final,outNameSNPStrandFlipped,quote=F,sep='\t',row.names=F,col.names=F)
+write.table(snp.error.final,outNameErrorSNP,quote=F,sep='\t',row.names=F,col.names=F)
+
+write.table(lr.all.indv.pop,outNameLR,quote=F,sep='\t',row.names=F)
+
+#save.image(outNameR)
+
+#rm(list=ls())

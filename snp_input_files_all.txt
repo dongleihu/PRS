@@ -1,0 +1,6 @@
+1	1_Cau_snp_input_072716.txt
+2	2_AfriA_snp_input_072716.txt
+3	3_Asian_snp_input_072716.txt
+8	snp_list.txt
+9	1_Cau_snp_input_072716.txt
+5	8_His_snp_input_072716.txt
